@@ -8,14 +8,15 @@ import (
 
 func TestContainer(t *testing.T) {
 	var (
-		c       *Container
-		key     = "simple"
+		c *Container
+		// key     = "simple"
 		val     interface{}
 		start   time.Time
 		cost    time.Duration
 		expVal1         = "hello, world"
 		expVal2         = "hello, pigger"
 		retVal  *string = &expVal1
+		err     error
 	)
 
 	// after 100 millisecond, change return value
@@ -23,15 +24,17 @@ func TestContainer(t *testing.T) {
 		retVal = &expVal2
 	})
 
-	c = NewContainer()
-	fn1 := func() (interface{}, error) {
+	fn1 := func(x, y int) (interface{}, error) {
 		// do something
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
+	if c, err = NewContainer(fn1, 300*time.Millisecond); err != nil {
+		t.Errorf("create cache container error: %v", err)
+	}
 
 	start = time.Now()
-	val = c.Get(key, 300*time.Millisecond, fn1)
+	val, _ = c.Get(1, 2)
 	cost = time.Now().Sub(start)
 	t.Logf("First call, cost: %v", cost)
 	if val != expVal1 {
@@ -42,7 +45,7 @@ func TestContainer(t *testing.T) {
 	}
 
 	start = time.Now()
-	val = c.Get(key, 300*time.Millisecond, fn1)
+	val, _ = c.Get(1, 2)
 	cost = time.Now().Sub(start)
 	t.Logf("Second call, cost: %v", cost)
 	if cost >= time.Millisecond*50 {
@@ -55,7 +58,7 @@ func TestContainer(t *testing.T) {
 	// after 300 milliseconds, read will refresh cache asynchronously
 	time.Sleep(300 * time.Millisecond)
 	start = time.Now()
-	val = c.Get(key, 300*time.Millisecond, fn1)
+	val, _ = c.Get(1, 2)
 	cost = time.Now().Sub(start)
 	t.Logf("Third call, cost: %v", cost)
 	if val != expVal1 {
@@ -68,7 +71,7 @@ func TestContainer(t *testing.T) {
 	// two seconds later, will read new cache value
 	time.Sleep(100 * time.Millisecond)
 	start = time.Now()
-	val = c.Get(key, 300*time.Millisecond, fn1)
+	val, _ = c.Get(1, 2)
 	cost = time.Now().Sub(start)
 	t.Logf("Fourth call, cost: %v", cost)
 	if val != expVal2 {
@@ -86,16 +89,19 @@ func TestRace(t *testing.T) {
 		expVal1         = "hello, world"
 		expVal2         = "hello, pigger"
 		retVal  *string = &expVal1
-		key             = "race"
-		ttl             = time.Nanosecond * 100
+		// key             = "race"
+		ttl = time.Nanosecond * 100
+		err error
 	)
-	c = NewContainer()
 	fn1 := func() (interface{}, error) {
 		// do something
 		time.Sleep(10 * time.Nanosecond)
 		return *retVal, nil
 	}
-	c.Get(key, ttl, fn1)
+	if c, err = NewContainer(fn1, ttl); err != nil {
+		t.Errorf("create cache container %v", err)
+	}
+	c.Get()
 
 	time.AfterFunc(time.Nanosecond*20, func() {
 		retVal = &expVal2
@@ -110,7 +116,7 @@ func TestRace(t *testing.T) {
 			)
 			for i := 0; i < repeat; i++ {
 				start = time.Now()
-				val = c.Get(key, ttl, fn1)
+				val, _ = c.Get()
 				t.Logf("get value: %v, cost: %v", val, time.Now().Sub(start))
 				wg.Done()
 			}
@@ -120,17 +126,16 @@ func TestRace(t *testing.T) {
 }
 
 func BenchmarkInitialRead(b *testing.B) {
-	c := NewContainer()
 	fn1 := func() (interface{}, error) {
 		// do something
 		time.Sleep(50 * time.Millisecond)
 		return "hello, world", nil
 	}
-	key := "initialRead"
+	c, _ := NewContainer(fn1, 100*time.Millisecond)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = c.Get(key, 100*time.Millisecond, fn1)
-		c.Remove(key)
+		c.Get()
+		c.Remove()
 	}
 }
 
@@ -138,19 +143,18 @@ func BenchmarkInitialedRead(b *testing.B) {
 	expVal1 := "hello, world"
 	expVal2 := "hello, pigger"
 	retVal := &expVal1
-	c := NewContainer()
 	fn1 := func() (interface{}, error) {
 		// do something
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
-	key := "initialedRead"
-	_ = c.Get(key, 1*time.Second, fn1)
+	c, _ := NewContainer(fn1, 1*time.Second)
+	c.Get()
 	b.ResetTimer()
 	time.AfterFunc(time.Millisecond*500, func() {
 		retVal = &expVal2
 	})
 	for i := 0; i < b.N; i++ {
-		_ = c.Get(key, 1*time.Second, fn1)
+		c.Get()
 	}
 }
