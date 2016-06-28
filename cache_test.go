@@ -16,7 +16,6 @@ func TestContainer(t *testing.T) {
 		expVal1         = "hello, world"
 		expVal2         = "hello, pigger"
 		retVal  *string = &expVal1
-		err     error
 	)
 
 	// after 100 millisecond, change return value
@@ -29,9 +28,7 @@ func TestContainer(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
-	if c, err = NewContainer(fn1, 300*time.Millisecond); err != nil {
-		t.Errorf("create cache container error: %v", err)
-	}
+	c = NewContainer(fn1, 300*time.Millisecond)
 
 	start = time.Now()
 	val, _ = c.Get(1, 2)
@@ -91,16 +88,13 @@ func TestRace(t *testing.T) {
 		retVal  *string = &expVal1
 		// key             = "race"
 		ttl = time.Nanosecond * 100
-		err error
 	)
 	fn1 := func() (interface{}, error) {
 		// do something
 		time.Sleep(10 * time.Nanosecond)
 		return *retVal, nil
 	}
-	if c, err = NewContainer(fn1, ttl); err != nil {
-		t.Errorf("create cache container %v", err)
-	}
+	c = NewContainer(fn1, ttl)
 	c.Get()
 
 	time.AfterFunc(time.Nanosecond*20, func() {
@@ -131,7 +125,7 @@ func BenchmarkInitialRead(b *testing.B) {
 		time.Sleep(50 * time.Millisecond)
 		return "hello, world", nil
 	}
-	c, _ := NewContainer(fn1, 100*time.Millisecond)
+	c := NewContainer(fn1, 100*time.Millisecond)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.Get()
@@ -148,7 +142,7 @@ func BenchmarkInitialedRead(b *testing.B) {
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
-	c, _ := NewContainer(fn1, 1*time.Second)
+	c := NewContainer(fn1, 1*time.Second)
 	c.Get()
 	b.ResetTimer()
 	time.AfterFunc(time.Millisecond*500, func() {
