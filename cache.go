@@ -21,31 +21,32 @@ type Container struct {
 	sync.RWMutex
 	capacity int
 	fn       interface{}
+	fnKind   reflect.Kind
 	fnNumIn  int
+	fnNumOut int
 	ttl      time.Duration
 	items    map[string]*Item
 }
 
-func NewContainer(fn interface{}, ttl time.Duration) (*Container, error) {
+func NewContainer(fn interface{}, ttl time.Duration) *Container {
 	t := reflect.TypeOf(fn)
-	if t.Kind() != reflect.Func {
-		return nil, ErrInvalidFn
-	}
-	if t.NumOut() != 2 {
-		return nil, ErrInvalidFn
-	}
 	c := new(Container)
 	c.capacity = DefaultCapacity
 	c.fn = fn
+	c.fnKind = t.Kind()
 	c.fnNumIn = t.NumIn()
+	c.fnNumOut = t.NumOut()
 	c.ttl = ttl
 	c.items = make(map[string]*Item, c.capacity)
-	return c, nil
+	return c
 }
 
 func (c *Container) Get(params ...interface{}) (interface{}, error) {
 	if len(params) != c.fnNumIn {
 		return nil, ErrFnParams
+	}
+	if c.fnKind != reflect.Func || c.fnNumOut != 2 {
+		return nil, ErrInvalidFn
 	}
 	var (
 		item *Item
