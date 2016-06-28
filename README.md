@@ -15,15 +15,15 @@ local cache container inspired by google [guava cahce](https://github.com/google
 ```go
 import "lcache"
 
-c := lcache.NewContainer() // create cache container
-fn := func() (interface{}, error) {
+fn := func(x, y int, z string) (interface{}, error) {
     return "bar", nil
 }
-ttl := time.Second * 30  // 30 senconds ttl
+c := lcache.NewContainer(fn, time.Second * 60) // create cache container, default capicity is 512
 // If cache data not in container, will add it in.
-// And return cached value
-val := c.Get("foo", ttl, fn)
-c.Remove("foo") // remove cache data with specified key
+// The input params must be adapted with fn, else will return error.
+// Cache key is string of params slice, e.g. "[0, 0, \"foo\"]"
+val, err := c.Get(0, 0, "foo")
+c.Remove(0, 0, "foo") // remove cache data with specified params
 c.RemoveAll()  // remove all cache data
 ```
 
@@ -41,7 +41,7 @@ BenchmarkInitialRead-4  	      30	  51496897 ns/op
 
 # Read under key in cache
 # In this case, cached data may be expired
-BenchmarkInitialedRead-4	20000000	       104 ns/op
+BenchmarkInitialedRead-4	 3000000	       390 ns/op
 ```
 
 ## Todo
