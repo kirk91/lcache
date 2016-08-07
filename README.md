@@ -1,6 +1,8 @@
 # lcache
 local cache container inspired by google [guava cahce](https://github.com/google/guava/wiki/CachesExplained)
 
+[![Build Status](https://travis-ci.org/kirk91/lcache.svg?branch=master)](https://travis-ci.org/kirk91/lcache) [![Coverage Status](https://coveralls.io/repos/github/kirk91/lcache/badge.svg?branch=master)](https://coveralls.io/github/kirk91/lcache?branch=master) [![GoDoc](https://godoc.org/github.com/kirk91/lcache?status.svg)](https://godoc.org/github.com/kirk91/lcache)
+
 
 ## Design
 
