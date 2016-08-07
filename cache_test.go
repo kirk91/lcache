@@ -13,9 +13,9 @@ func TestContainer(t *testing.T) {
 		val     interface{}
 		start   time.Time
 		cost    time.Duration
-		expVal1         = "hello, world"
-		expVal2         = "hello, pigger"
-		retVal  *string = &expVal1
+		expVal1 = "hello, world"
+		expVal2 = "hello, pigger"
+		retVal  = &expVal1
 	)
 
 	// after 100 millisecond, change return value
@@ -28,7 +28,7 @@ func TestContainer(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
-	c = NewContainer(fn1, 300*time.Millisecond)
+	c, _ = NewContainer(fn1, 300*time.Millisecond)
 
 	start = time.Now()
 	val, _ = c.Get(1, 2)
@@ -79,6 +79,31 @@ func TestContainer(t *testing.T) {
 	}
 }
 
+func TestEvictContainer(t *testing.T) {
+	fn := func(x, y int) (interface{}, error) {
+		return "hello, world", nil
+	}
+	c, _ := NewContainerWithSize(2, fn, 300*time.Millisecond)
+
+	// first
+	c.Get(1, 2)
+	if c.Len() != 1 {
+		t.Errorf("container expected length is 1, but got %d", c.Len())
+	}
+
+	// second
+	c.Get(2, 3)
+	if c.Len() != 2 {
+		t.Errorf("container expected length is 2, but got %d", c.Len())
+	}
+
+	// third
+	c.Get(3, 4)
+	if c.Len() != 2 {
+		t.Errorf("container expected length is 2, but got %d", c.Len())
+	}
+}
+
 func TestRace(t *testing.T) {
 	var (
 		wg      sync.WaitGroup
@@ -94,7 +119,7 @@ func TestRace(t *testing.T) {
 		time.Sleep(10 * time.Nanosecond)
 		return *retVal, nil
 	}
-	c = NewContainer(fn1, ttl)
+	c, _ = NewContainer(fn1, ttl)
 	c.Get()
 
 	time.AfterFunc(time.Nanosecond*20, func() {
@@ -104,14 +129,8 @@ func TestRace(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		wg.Add(repeat)
 		go func() {
-			var (
-				start time.Time
-				val   interface{}
-			)
 			for i := 0; i < repeat; i++ {
-				start = time.Now()
-				val, _ = c.Get()
-				t.Logf("get value: %v, cost: %v", val, time.Now().Sub(start))
+				c.Get()
 				wg.Done()
 			}
 		}()
@@ -125,7 +144,7 @@ func BenchmarkInitialRead(b *testing.B) {
 		time.Sleep(50 * time.Millisecond)
 		return "hello, world", nil
 	}
-	c := NewContainer(fn1, 100*time.Millisecond)
+	c, _ := NewContainer(fn1, 100*time.Millisecond)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.Get()
@@ -142,7 +161,7 @@ func BenchmarkInitialedRead(b *testing.B) {
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
-	c := NewContainer(fn1, 1*time.Second)
+	c, _ := NewContainer(fn1, 1*time.Second)
 	c.Get()
 	b.ResetTimer()
 	time.AfterFunc(time.Millisecond*500, func() {
