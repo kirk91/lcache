@@ -34,17 +34,28 @@ type Container struct {
 	evictList *list.List
 }
 
-// NewContainer create a cache container with default capacity and given parameters.
-func NewContainer(fn interface{}, ttl time.Duration) (*Container, error) {
+// New create a cache container with default capacity and given parameters.
+func New(fn interface{}, ttl time.Duration) (*Container, error) {
 	return newContainer(DefaultCapacity, fn, ttl)
 }
 
-// NewContainerWithSize constructs a cache container with the given parameters.
-func NewContainerWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error) {
+// NewWithSize constructs a cache container with the given parameters.
+func NewWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error) {
 	if size < 0 {
 		return nil, errors.New("Must provide a positive size")
 	}
 	return newContainer(size, fn, ttl)
+}
+
+// Must is a helper that wraps a call to a function returning (*Container, error)
+// and panics if the error is non-nil. It is intended for use in variable initializations
+// such as
+//		var c = lcache.Must(lcache.New(func(){}, time.Minute))
+func Must(c *Container, err error) *Container {
+	if err != nil {
+		panic(err)
+	}
+	return c
 }
 
 func newContainer(size int, fn interface{}, ttl time.Duration) (*Container, error) {
