@@ -28,7 +28,7 @@ func TestContainer(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
-	c, _ = NewContainer(fn1, 300*time.Millisecond)
+	c, _ = New(fn1, 300*time.Millisecond)
 
 	start = time.Now()
 	val, _ = c.Get(1, 2)
@@ -83,7 +83,7 @@ func TestEvictContainer(t *testing.T) {
 	fn := func(x, y int) (interface{}, error) {
 		return "hello, world", nil
 	}
-	c, _ := NewContainerWithSize(2, fn, 300*time.Millisecond)
+	c, _ := NewWithSize(2, fn, 300*time.Millisecond)
 
 	// first
 	c.Get(1, 2)
@@ -104,6 +104,24 @@ func TestEvictContainer(t *testing.T) {
 	}
 }
 
+func TestMust(t *testing.T) {
+	defer func() {
+		if p := recover(); p != nil {
+			t.Errorf("expected nil, but got panic: %s", ErrInvalidFn)
+		}
+	}()
+	Must(New(func() (interface{}, error) { return nil, nil }, time.Nanosecond))
+}
+
+func TestMustPanic(t *testing.T) {
+	defer func() {
+		if p := recover(); p == nil {
+			t.Errorf("expected panic: %s, but got nil", ErrInvalidFn)
+		}
+	}()
+	Must(New("123", time.Nanosecond))
+}
+
 func TestRace(t *testing.T) {
 	var (
 		wg      sync.WaitGroup
@@ -119,7 +137,7 @@ func TestRace(t *testing.T) {
 		time.Sleep(10 * time.Nanosecond)
 		return *retVal, nil
 	}
-	c, _ = NewContainer(fn1, ttl)
+	c, _ = New(fn1, ttl)
 	c.Get()
 
 	time.AfterFunc(time.Nanosecond*20, func() {
@@ -144,7 +162,7 @@ func BenchmarkInitialRead(b *testing.B) {
 		time.Sleep(50 * time.Millisecond)
 		return "hello, world", nil
 	}
-	c, _ := NewContainer(fn1, 100*time.Millisecond)
+	c, _ := New(fn1, 100*time.Millisecond)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		c.Get()
@@ -161,7 +179,7 @@ func BenchmarkInitialedRead(b *testing.B) {
 		time.Sleep(50 * time.Millisecond)
 		return *retVal, nil
 	}
-	c, _ := NewContainer(fn1, 1*time.Second)
+	c, _ := New(fn1, 1*time.Second)
 	c.Get()
 	b.ResetTimer()
 	time.AfterFunc(time.Millisecond*500, func() {
