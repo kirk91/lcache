@@ -104,6 +104,28 @@ func TestEvictContainer(t *testing.T) {
 	}
 }
 
+type Foo struct {
+	A int
+	B string
+}
+
+func TestPointerValues(t *testing.T) {
+	fn := func(f *Foo) (interface{}, error) {
+		return nil, nil
+	}
+	c, _ := NewWithSize(2, fn, 300*time.Millisecond)
+
+	c.Get(new(Foo))
+	c.Get(new(Foo))
+	if c.Len() != 1 {
+		t.Errorf("container expected length is 1, but got %d", c.Len())
+	}
+	c.Remove(new(Foo))
+	if c.Len() != 0 {
+		t.Errorf("container expected length is 0, but got %d", c.Len())
+	}
+}
+
 func TestMust(t *testing.T) {
 	defer func() {
 		if p := recover(); p != nil {
