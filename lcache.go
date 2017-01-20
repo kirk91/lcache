@@ -1,6 +1,7 @@
 package lcache
 
 import (
+	"bytes"
 	"container/list"
 	"errors"
 	"fmt"
@@ -76,6 +77,18 @@ func newContainer(size int, fn interface{}, ttl time.Duration) (*Container, erro
 	return c, nil
 }
 
+// generateUniqueKey generates unique key with paramters.
+func generateUniqueKey(params ...interface{}) string {
+	// generate unique key
+	buf := bytes.NewBufferString("")
+	// FIXME: ["#" ""] and ["" "#"] will generate same key
+	for _, param := range params {
+		// convert pointer to reference value
+		buf.WriteString(fmt.Sprintf("#%v", reflect.Indirect(reflect.ValueOf(param))))
+	}
+	return buf.String()
+}
+
 // Get is used to obtain the value with the given parameters. If the params string
 // has in the container, it will return immediately. Otherwise, it will load data
 // with the fn callback.
@@ -85,25 +98,24 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 		return nil, ErrFnParams
 	}
 
-	key := fmt.Sprintf("%v", params)
 	c.Lock()
 	defer c.Unlock()
+	key := generateUniqueKey(params...)
 	ent, ok := c.items[key]
 	if ok {
 		c.evictList.MoveToFront(ent)
-		return ent.Value.(*Item).Value(), nil
+		return ent.Value.(*item).Value(), nil
 	}
 
-	// add new item
-	item := NewItem(params, c.ttl, c.fn)
-	ent = c.evictList.PushFront(item)
+	itm := newItem(params, key, c.ttl, c.fn)
+	ent = c.evictList.PushFront(itm)
 	c.items[key] = ent
 
 	evict := c.evictList.Len() > c.capacity
 	if evict {
 		c.removeOldest()
 	}
-	return item.Value(), nil
+	return itm.Value(), nil
 }
 
 // removeOldest removes the oldest item from the container.
@@ -117,8 +129,8 @@ func (c *Container) removeOldest() {
 // removeElement is used to remove a given list element from the container.
 func (c *Container) removeElement(e *list.Element) {
 	c.evictList.Remove(e)
-	item := e.Value.(*Item)
-	delete(c.items, item.key)
+	itm := e.Value.(*item)
+	delete(c.items, itm.key)
 }
 
 // Purge is used to completely clear the container
@@ -134,7 +146,7 @@ func (c *Container) Purge() {
 // Remove removes the provided params from the container, returning if the
 // params key was contained.
 func (c *Container) Remove(params ...interface{}) bool {
-	key := fmt.Sprintf("%v", params)
+	key := generateUniqueKey(params...)
 	c.Lock()
 	defer c.Unlock()
 	if ent, ok := c.items[key]; ok {
@@ -151,8 +163,8 @@ func (c *Container) Len() int {
 	return len(c.items)
 }
 
-// Item is used to hold a value
-type Item struct {
+// item is used to hold a value
+type item struct {
 	key        string
 	params     []interface{}
 	value      interface{}
@@ -165,9 +177,10 @@ type Item struct {
 	mu         sync.Mutex
 }
 
-// NewItem constructs an item of the given parameters
-func NewItem(params []interface{}, ttl time.Duration, fn interface{}) *Item {
-	return &Item{key: fmt.Sprintf("%v", params),
+// newItem constructs an item of the given parameters
+func newItem(params []interface{}, key string, ttl time.Duration, fn interface{}) *item {
+	return &item{
+		key:       key,
 		params:    params,
 		ttl:       ttl,
 		fn:        fn,
@@ -178,7 +191,7 @@ func NewItem(params []interface{}, ttl time.Duration, fn interface{}) *Item {
 // Value returns the real value in the item. If real value has been loaded,
 // it will return immediately. Otherwise, it will return until the real value
 // is initialed.
-func (i *Item) Value() (val interface{}) {
+func (i *item) Value() (val interface{}) {
 	if time.Now().Before(i.expire) {
 		return i.value
 	}
@@ -192,7 +205,7 @@ func (i *Item) Value() (val interface{}) {
 }
 
 // Refresh is used to refresh real value with fn callback.
-func (i *Item) Refresh() {
+func (i *item) Refresh() {
 	i.mu.Lock()
 	if i.refreshing {
 		i.mu.Unlock()
@@ -204,7 +217,7 @@ func (i *Item) Refresh() {
 	return
 }
 
-func (i *Item) refresh() {
+func (i *item) refresh() {
 	// load data with fn
 	if val, err := i.loadData(); err == nil {
 		i.value = val
@@ -221,7 +234,7 @@ func (i *Item) refresh() {
 }
 
 // loadData is used to load data with fn and params
-func (i *Item) loadData() (interface{}, error) {
+func (i *item) loadData() (interface{}, error) {
 	f := reflect.ValueOf(i.fn)
 	in := make([]reflect.Value, f.Type().NumIn())
 	for k, param := range i.params {
