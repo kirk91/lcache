@@ -20,6 +20,10 @@ var (
 	ErrInvalidFn = errors.New("invalid cache fn")
 	// ErrFnParams indicates the given parameters not matched with fn callback
 	ErrFnParams = errors.New("cache fn params not adapted")
+
+	// ErrResourceExhausted indicates underlying resouce exhausted, the response from underlying
+	// api or interface won't be cached.
+	ErrResourceExhausted = errors.New("resouce exhausted")
 )
 
 // Container implements a thread-safe cache container
@@ -104,7 +108,7 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 	ent, ok := c.items[key]
 	if ok {
 		c.evictList.MoveToFront(ent)
-		return ent.Value.(*item).Value(), nil
+		return ent.Value.(*item).Value()
 	}
 
 	itm := newItem(params, key, c.ttl, c.fn)
@@ -115,7 +119,7 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 	if evict {
 		c.removeOldest()
 	}
-	return itm.Value(), nil
+	return itm.Value()
 }
 
 // removeOldest removes the oldest item from the container.
@@ -168,6 +172,7 @@ type item struct {
 	key        string
 	params     []interface{}
 	value      interface{}
+	err        error
 	ttl        time.Duration
 	expire     time.Time
 	fn         interface{}
@@ -191,9 +196,9 @@ func newItem(params []interface{}, key string, ttl time.Duration, fn interface{}
 // Value returns the real value in the item. If real value has been loaded,
 // it will return immediately. Otherwise, it will return until the real value
 // is initialed.
-func (i *item) Value() (val interface{}) {
+func (i *item) Value() (val interface{}, err error) {
 	if time.Now().Before(i.expire) {
-		return i.value
+		return i.value, i.err
 	}
 	i.Refresh()
 	// if item has not initialed, wait until initial done.
@@ -201,7 +206,7 @@ func (i *item) Value() (val interface{}) {
 	if !i.initialed {
 		<-i.initialCh
 	}
-	return i.value
+	return i.value, i.err
 }
 
 // Refresh is used to refresh real value with fn callback.
@@ -219,8 +224,11 @@ func (i *item) Refresh() {
 
 func (i *item) refresh() {
 	// load data with fn
-	if val, err := i.loadData(); err == nil {
+	val, err := i.loadData()
+	// don't cache response when underlying resouce exhausted
+	if err != ErrResourceExhausted {
 		i.value = val
+		i.err = err
 	}
 
 	i.expire = time.Now().Add(i.ttl)
