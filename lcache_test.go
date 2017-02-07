@@ -1,6 +1,7 @@
 package lcache
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ func TestContainer(t *testing.T) {
 		start   time.Time
 		cost    time.Duration
 		expVal1 = "hello, world"
-		expVal2 = "hello, pigger"
+		expVal2 = "hello, kirk"
 		retVal  = &expVal1
 	)
 
@@ -76,6 +77,24 @@ func TestContainer(t *testing.T) {
 	}
 	if cost >= time.Millisecond*50 {
 		t.Errorf("cost time %v error", cost)
+	}
+}
+
+func TestError(t *testing.T) {
+	expectedErr := errors.New("expected error")
+	retErr := expectedErr
+	fn := func(x, y int) (interface{}, error) {
+		return nil, retErr
+	}
+	c, _ := New(fn, time.Millisecond*30)
+	_, err := c.Get(1, 2)
+	if err != expectedErr {
+		t.Errorf("expected error: %v, but got: %v", expectedErr, err)
+	}
+	retErr = ErrResourceExhausted
+	time.Sleep(time.Millisecond * 40)
+	if err != expectedErr {
+		t.Errorf("expected error: %v, but got: %v", expectedErr, err)
 	}
 }
 
