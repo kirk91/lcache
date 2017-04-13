@@ -137,20 +137,21 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 		c.Unlock()
 
 		return itm.Value()
-	} else {
-		if ent, ok := c.elements[key]; ok {
-			c.Lock()
-			c.evictList.MoveToFront(ent)
-			c.Unlock()
-			return ent.Value.(*item).Value()
-		}
+	}
 
+	if ent, ok := c.elements[key]; ok {
 		c.Lock()
-		ent := c.getLockedLRU(params, key)
+		c.evictList.MoveToFront(ent)
 		c.Unlock()
-
 		return ent.Value.(*item).Value()
 	}
+
+	c.Lock()
+	ent := c.getLockedLRU(params, key)
+	c.Unlock()
+
+	return ent.Value.(*item).Value()
+
 }
 
 func (c *Container) getLocked(params []interface{}, key string) *item {
