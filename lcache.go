@@ -29,19 +29,22 @@ var (
 // Container implements a thread-safe cache container
 type Container struct {
 	sync.RWMutex
-	capacity  int
-	fn        interface{}
-	fnKind    reflect.Kind
-	fnNumIn   int
-	fnNumOut  int
-	ttl       time.Duration
-	items     map[string]*list.Element
+	capacity int
+	fn       interface{}
+	fnKind   reflect.Kind
+	fnNumIn  int
+	fnNumOut int
+	ttl      time.Duration
+	items    map[string]*item
+
+	enableLRU bool // lru related paramters
+	elements  map[string]*list.Element
 	evictList *list.List
 }
 
 // New create a cache container with default capacity and given parameters.
 func New(fn interface{}, ttl time.Duration) (*Container, error) {
-	return newContainer(DefaultCapacity, fn, ttl)
+	return newContainer(DefaultCapacity, fn, ttl, false)
 }
 
 // NewWithSize constructs a cache container with the given parameters.
@@ -49,7 +52,20 @@ func NewWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error
 	if size < 0 {
 		return nil, errors.New("Must provide a positive size")
 	}
-	return newContainer(size, fn, ttl)
+	return newContainer(size, fn, ttl, false)
+}
+
+// NewLRU create a cache container with default capacity and given parameters.
+func NewLRU(fn interface{}, ttl time.Duration) (*Container, error) {
+	return newContainer(DefaultCapacity, fn, ttl, true)
+}
+
+// NewLRUWithSize constructs a cache container with the given parameters.
+func NewLRUWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error) {
+	if size < 0 {
+		return nil, errors.New("Must provide a positive size")
+	}
+	return newContainer(size, fn, ttl, true)
 }
 
 // Must is a helper that wraps a call to a function returning (*Container, error)
@@ -63,7 +79,7 @@ func Must(c *Container, err error) *Container {
 	return c
 }
 
-func newContainer(size int, fn interface{}, ttl time.Duration) (*Container, error) {
+func newContainer(size int, fn interface{}, ttl time.Duration, enableLRU bool) (*Container, error) {
 	t := reflect.TypeOf(fn)
 	if t.Kind() != reflect.Func || t.NumOut() != 2 {
 		return nil, ErrInvalidFn
@@ -75,9 +91,16 @@ func newContainer(size int, fn interface{}, ttl time.Duration) (*Container, erro
 		fnNumIn:   t.NumIn(),
 		fnNumOut:  t.NumOut(),
 		ttl:       ttl,
-		items:     make(map[string]*list.Element),
-		evictList: list.New(),
+		enableLRU: enableLRU,
 	}
+
+	if enableLRU {
+		c.evictList = list.New()
+		c.elements = make(map[string]*list.Element)
+	} else {
+		c.items = make(map[string]*item)
+	}
+
 	return c, nil
 }
 
@@ -102,28 +125,64 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 		return nil, ErrFnParams
 	}
 
-	c.Lock()
-	defer c.Unlock()
 	key := generateUniqueKey(params...)
-	ent, ok := c.items[key]
-	if ok {
-		c.evictList.MoveToFront(ent)
+
+	if !c.enableLRU {
+		if itm, ok := c.items[key]; ok {
+			return itm.Value()
+		}
+
+		c.Lock()
+		itm := c.getLocked(params, key)
+		c.Unlock()
+
+		return itm.Value()
+	} else {
+		if ent, ok := c.elements[key]; ok {
+			c.Lock()
+			c.evictList.MoveToFront(ent)
+			c.Unlock()
+			return ent.Value.(*item).Value()
+		}
+
+		c.Lock()
+		ent := c.getLockedLRU(params, key)
+		c.Unlock()
+
 		return ent.Value.(*item).Value()
+	}
+}
+
+func (c *Container) getLocked(params []interface{}, key string) *item {
+	if itm, ok := c.items[key]; ok {
+		return itm
 	}
 
 	itm := newItem(params, key, c.ttl, c.fn)
-	ent = c.evictList.PushFront(itm)
-	c.items[key] = ent
+	c.items[key] = itm
 
-	evict := c.evictList.Len() > c.capacity
-	if evict {
-		c.removeOldest()
+	return itm
+}
+
+func (c *Container) getLockedLRU(params []interface{}, key string) *list.Element {
+	if ent, ok := c.elements[key]; ok {
+		c.evictList.MoveToFront(ent)
+		return ent
 	}
-	return itm.Value()
+
+	itm := newItem(params, key, c.ttl, c.fn)
+	ent := c.evictList.PushFront(itm)
+	c.elements[key] = ent
+
+	if c.evictList.Len() > c.capacity {
+		c.removeOldestElement()
+	}
+
+	return ent
 }
 
 // removeOldest removes the oldest item from the container.
-func (c *Container) removeOldest() {
+func (c *Container) removeOldestElement() {
 	ent := c.evictList.Back()
 	if ent != nil {
 		c.removeElement(ent)
@@ -134,17 +193,23 @@ func (c *Container) removeOldest() {
 func (c *Container) removeElement(e *list.Element) {
 	c.evictList.Remove(e)
 	itm := e.Value.(*item)
-	delete(c.items, itm.key)
+	delete(c.elements, itm.key)
 }
 
 // Purge is used to completely clear the container
 func (c *Container) Purge() {
 	c.Lock()
 	defer c.Unlock()
-	for key := range c.items {
-		delete(c.items, key)
+	if c.enableLRU {
+		for key := range c.elements {
+			delete(c.elements, key)
+		}
+		c.evictList.Init()
+	} else {
+		for key := range c.items {
+			delete(c.items, key)
+		}
 	}
-	c.evictList.Init()
 }
 
 // Remove removes the provided params from the container, returning if the
@@ -153,9 +218,16 @@ func (c *Container) Remove(params ...interface{}) bool {
 	key := generateUniqueKey(params...)
 	c.Lock()
 	defer c.Unlock()
-	if ent, ok := c.items[key]; ok {
-		c.removeElement(ent)
-		return true
+	if c.enableLRU {
+		if ent, ok := c.elements[key]; ok {
+			c.removeElement(ent)
+			return true
+		}
+	} else {
+		if _, ok := c.items[key]; ok {
+			delete(c.items, key)
+			return true
+		}
 	}
 	return false
 }
@@ -164,6 +236,9 @@ func (c *Container) Remove(params ...interface{}) bool {
 func (c *Container) Len() int {
 	c.RLock()
 	defer c.RUnlock()
+	if c.enableLRU {
+		return len(c.elements)
+	}
 	return len(c.items)
 }
 
