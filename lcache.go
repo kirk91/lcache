@@ -55,12 +55,12 @@ func NewWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error
 	return newContainer(size, fn, ttl, false)
 }
 
-// NewLRU create a cache container with default capacity and given parameters.
+// NewLRU create a lru cache container with default capacity and given parameters.
 func NewLRU(fn interface{}, ttl time.Duration) (*Container, error) {
 	return newContainer(DefaultCapacity, fn, ttl, true)
 }
 
-// NewLRUWithSize constructs a cache container with the given parameters.
+// NewLRUWithSize constructs a lru cache container with the given parameters.
 func NewLRUWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error) {
 	if size < 0 {
 		return nil, errors.New("Must provide a positive size")
