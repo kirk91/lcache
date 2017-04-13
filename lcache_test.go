@@ -102,7 +102,7 @@ func TestEvictContainer(t *testing.T) {
 	fn := func(x, y int) (interface{}, error) {
 		return "hello, world", nil
 	}
-	c, _ := NewWithSize(2, fn, 300*time.Millisecond)
+	c, _ := NewLRUWithSize(2, fn, 300*time.Millisecond)
 
 	// first
 	c.Get(1, 2)
