@@ -2,6 +2,8 @@ package lcache
 
 import (
 	"errors"
+	"fmt"
+	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -78,6 +80,57 @@ func TestContainer(t *testing.T) {
 	if cost >= time.Millisecond*50 {
 		t.Errorf("cost time %v error", cost)
 	}
+}
+
+func TestConcurrency(t *testing.T) {
+	fn := func(x, y int) (interface{}, error) {
+		return x + y, nil
+	}
+	c, _ := New(fn, time.Second*10)
+	ch := make(chan struct{})
+	startCh := make(chan struct{})
+	go func() {
+		<-startCh
+		for {
+			select {
+			case <-ch:
+				return
+			default:
+				c.Get(1, rand.Intn(100))
+			}
+		}
+	}()
+	go func() {
+		<-startCh
+		for {
+			select {
+			case <-ch:
+				return
+			default:
+				c.Get(1, rand.Intn(100))
+			}
+		}
+	}()
+	go func() {
+		<-startCh
+		defer func() {
+			fmt.Println("haha")
+			if r := recover(); r != nil {
+				t.Errorf("unexpected panic: %v", r)
+			}
+		}()
+		for {
+			select {
+			case <-ch:
+				return
+			default:
+				c.Get(1, rand.Intn(100))
+			}
+		}
+	}()
+	close(startCh)
+	time.Sleep(1 * time.Second)
+	close(ch)
 }
 
 func TestError(t *testing.T) {
