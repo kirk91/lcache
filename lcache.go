@@ -160,7 +160,13 @@ func (c *Container) getLocked(params []interface{}, key string) *item {
 	}
 
 	itm := newItem(params, key, c.ttl, c.fn)
-	c.items[key] = itm
+	// copy on write
+	items := make(map[string]*item, len(c.items)+1)
+	for k, v := range c.items {
+		items[k] = v
+	}
+	items[key] = itm
+	c.items = items
 
 	return itm
 }
@@ -173,7 +179,14 @@ func (c *Container) getLockedLRU(params []interface{}, key string) *list.Element
 
 	itm := newItem(params, key, c.ttl, c.fn)
 	ent := c.evictList.PushFront(itm)
-	c.elements[key] = ent
+
+	// copy on write
+	elements := make(map[string]*list.Element, len(c.elements)+1)
+	for k, v := range c.elements {
+		elements[k] = v
+	}
+	elements[key] = ent
+	c.elements = elements
 
 	if c.evictList.Len() > c.capacity {
 		c.removeOldestElement()
