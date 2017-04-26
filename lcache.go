@@ -26,6 +26,11 @@ var (
 	ErrResourceExhausted = errors.New("resouce exhausted")
 )
 
+type a
+
+func Hello() {
+}
+
 // Container implements a thread-safe cache container
 type Container struct {
 	sync.RWMutex
