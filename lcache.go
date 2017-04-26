@@ -26,6 +26,8 @@ var (
 	ErrResourceExhausted = errors.New("resouce exhausted")
 )
 
+type a
+
 func Hello() {
 }
 
