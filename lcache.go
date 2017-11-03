@@ -26,46 +26,51 @@ var (
 	ErrResourceExhausted = errors.New("resouce exhausted")
 )
 
+type options struct {
+	cacheKeyGenerator CacheKeyGenerator
+	enableLRU         bool
+	capacity          int
+}
+
+type Option func(*options)
+
+func WithCacheKeyGenerator(g CacheKeyGenerator) Option {
+	return func(o *options) {
+		o.cacheKeyGenerator = g
+	}
+}
+
+func WithLRU() Option {
+	return func(o *options) {
+		o.enableLRU = true
+	}
+}
+
+func WithCapacity(capacity int) Option {
+	return func(o *options) {
+		o.capacity = capacity
+	}
+}
+
 // Container implements a thread-safe cache container
 type Container struct {
 	sync.RWMutex
-	capacity int
+	opts *options
+
+	elements  map[string]*list.Element // lru releated elements
+	evictList *list.List
+
 	fn       interface{}
 	fnKind   reflect.Kind
 	fnNumIn  int
 	fnNumOut int
 	ttl      time.Duration
 	items    map[string]*item
-
-	enableLRU bool // lru related paramters
-	elements  map[string]*list.Element
-	evictList *list.List
 }
 
 // New create a cache container with default capacity and given parameters.
-func New(fn interface{}, ttl time.Duration) (*Container, error) {
-	return newContainer(DefaultCapacity, fn, ttl, false)
-}
-
-// NewWithSize constructs a cache container with the given parameters.
-func NewWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error) {
-	if size < 0 {
-		return nil, errors.New("Must provide a positive size")
-	}
-	return newContainer(size, fn, ttl, false)
-}
-
-// NewLRU create a lru cache container with default capacity and given parameters.
-func NewLRU(fn interface{}, ttl time.Duration) (*Container, error) {
-	return newContainer(DefaultCapacity, fn, ttl, true)
-}
-
-// NewLRUWithSize constructs a lru cache container with the given parameters.
-func NewLRUWithSize(size int, fn interface{}, ttl time.Duration) (*Container, error) {
-	if size < 0 {
-		return nil, errors.New("Must provide a positive size")
-	}
-	return newContainer(size, fn, ttl, true)
+func New(fn interface{}, ttl time.Duration, opt ...Option) (*Container, error) {
+	return newContainer(fn, ttl, opt...)
 }
 
 // Must is a helper that wraps a call to a function returning (*Container, error)
@@ -79,33 +84,40 @@ func Must(c *Container, err error) *Container {
 	return c
 }
 
-func newContainer(size int, fn interface{}, ttl time.Duration, enableLRU bool) (*Container, error) {
+func newContainer(fn interface{}, ttl time.Duration, opt ...Option) (*Container, error) {
+	opts := &options{capacity: DefaultCapacity, cacheKeyGenerator: defaultCacheKeyGenerator}
+	for _, o := range opt {
+		o(opts)
+	}
+	if opts.capacity <= 0 {
+		return nil, errors.New("capacity must be positive")
+	}
+
 	t := reflect.TypeOf(fn)
 	if t.Kind() != reflect.Func || t.NumOut() != 2 {
 		return nil, ErrInvalidFn
 	}
-	c := &Container{
-		capacity:  size,
-		fn:        fn,
-		fnKind:    t.Kind(),
-		fnNumIn:   t.NumIn(),
-		fnNumOut:  t.NumOut(),
-		ttl:       ttl,
-		enableLRU: enableLRU,
-	}
 
-	if enableLRU {
+	c := &Container{
+		opts:     opts,
+		fn:       fn,
+		fnKind:   t.Kind(),
+		fnNumIn:  t.NumIn(),
+		fnNumOut: t.NumOut(),
+		ttl:      ttl,
+	}
+	if c.opts.enableLRU {
 		c.evictList = list.New()
 		c.elements = make(map[string]*list.Element)
 	} else {
 		c.items = make(map[string]*item)
 	}
-
 	return c, nil
 }
 
-// generateUniqueKey generates unique key with paramters.
-func generateUniqueKey(params ...interface{}) string {
+type CacheKeyGenerator func(params ...interface{}) string
+
+func defaultCacheKeyGenerator(params ...interface{}) string {
 	// generate unique key
 	buf := bytes.NewBufferString("")
 	// FIXME: ["#" ""] and ["" "#"] will generate same key
@@ -125,9 +137,9 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 		return nil, ErrFnParams
 	}
 
-	key := generateUniqueKey(params...)
+	key := c.opts.cacheKeyGenerator(params...)
 
-	if !c.enableLRU {
+	if !c.opts.enableLRU {
 		if itm, ok := c.items[key]; ok {
 			return itm.Value()
 		}
@@ -188,7 +200,7 @@ func (c *Container) getLockedLRU(params []interface{}, key string) *list.Element
 	elements[key] = ent
 	c.elements = elements
 
-	if c.evictList.Len() > c.capacity {
+	if c.evictList.Len() > c.opts.capacity {
 		c.removeOldestElement()
 	}
 
@@ -214,7 +226,7 @@ func (c *Container) removeElement(e *list.Element) {
 func (c *Container) Purge() {
 	c.Lock()
 	defer c.Unlock()
-	if c.enableLRU {
+	if c.opts.enableLRU {
 		for key := range c.elements {
 			delete(c.elements, key)
 		}
@@ -229,10 +241,10 @@ func (c *Container) Purge() {
 // Remove removes the provided params from the container, returning if the
 // params key was contained.
 func (c *Container) Remove(params ...interface{}) bool {
-	key := generateUniqueKey(params...)
+	key := c.opts.cacheKeyGenerator(params...)
 	c.Lock()
 	defer c.Unlock()
-	if c.enableLRU {
+	if c.opts.enableLRU {
 		if ent, ok := c.elements[key]; ok {
 			c.removeElement(ent)
 			return true
@@ -250,7 +262,7 @@ func (c *Container) Remove(params ...interface{}) bool {
 func (c *Container) Len() int {
 	c.RLock()
 	defer c.RUnlock()
-	if c.enableLRU {
+	if c.opts.enableLRU {
 		return len(c.elements)
 	}
 	return len(c.items)

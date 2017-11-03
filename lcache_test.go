@@ -1,9 +1,12 @@
 package lcache
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -114,7 +117,6 @@ func TestConcurrency(t *testing.T) {
 	go func() {
 		<-startCh
 		defer func() {
-			fmt.Println("haha")
 			if r := recover(); r != nil {
 				t.Errorf("unexpected panic: %v", r)
 			}
@@ -155,7 +157,7 @@ func TestEvictContainer(t *testing.T) {
 	fn := func(x, y int) (interface{}, error) {
 		return "hello, world", nil
 	}
-	c, _ := NewLRUWithSize(2, fn, 300*time.Millisecond)
+	c, _ := New(fn, 300*time.Millisecond, WithCapacity(2), WithLRU())
 
 	// first
 	c.Get(1, 2)
@@ -185,7 +187,7 @@ func TestPointerValues(t *testing.T) {
 	fn := func(f *Foo) (interface{}, error) {
 		return nil, nil
 	}
-	c, _ := NewWithSize(2, fn, 300*time.Millisecond)
+	c, _ := New(fn, 300*time.Millisecond, WithCapacity(2))
 
 	c.Get(new(Foo))
 	c.Get(new(Foo))
@@ -248,6 +250,30 @@ func TestRace(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestCustomCacheKeyGenerator(t *testing.T) {
+	fn := func(ctx context.Context, x, y int) (interface{}, error) {
+		return x + y + int(time.Now().UnixNano()), nil
+	}
+	g := func(params ...interface{}) string {
+		// generate unique key
+		buf := bytes.NewBufferString("")
+		// FIXME: ["#" ""] and ["" "#"] will generate same key
+		for _, param := range params[1:] {
+			// convert pointer to reference value
+			buf.WriteString(fmt.Sprintf("#%v", reflect.Indirect(reflect.ValueOf(param))))
+		}
+		return buf.String()
+	}
+	c, _ := New(fn, time.Second*5, WithCacheKeyGenerator(g))
+	ctx := context.Background()
+	res, _ := c.Get(ctx, 1, 2)
+	ctx = context.WithValue(ctx, struct{}{}, "changed context")
+	res1, _ := c.Get(ctx, 1, 2)
+	if res != res1 {
+		t.Errorf("expected %v, but got %v", res, res1)
+	}
 }
 
 func BenchmarkInitialRead(b *testing.B) {
