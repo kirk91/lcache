@@ -253,26 +253,54 @@ func TestRace(t *testing.T) {
 }
 
 func TestCustomCacheKeyGenerator(t *testing.T) {
-	fn := func(ctx context.Context, x, y int) (interface{}, error) {
+	fn := func(x, y int) (interface{}, error) {
 		return x + y + int(time.Now().UnixNano()), nil
 	}
 	g := func(params ...interface{}) string {
 		// generate unique key
 		buf := bytes.NewBufferString("")
 		// FIXME: ["#" ""] and ["" "#"] will generate same key
-		for _, param := range params[1:] {
+		for _, param := range params {
 			// convert pointer to reference value
-			buf.WriteString(fmt.Sprintf("#%v", reflect.Indirect(reflect.ValueOf(param))))
+			buf.WriteString(fmt.Sprintf("^%v", reflect.Indirect(reflect.ValueOf(param))))
 		}
 		return buf.String()
 	}
 	c, _ := New(fn, time.Second*5, WithCacheKeyGenerator(g))
-	ctx := context.Background()
-	res, _ := c.Get(ctx, 1, 2)
-	ctx = context.WithValue(ctx, struct{}{}, "changed context")
-	res1, _ := c.Get(ctx, 1, 2)
+	res, _ := c.Get(1, 2)
+	res1, _ := c.Get(1, 2)
 	if res != res1 {
 		t.Errorf("expected %v, but got %v", res, res1)
+	}
+}
+
+func TestContextSupport(t *testing.T) {
+	fn := func(ctx context.Context, x, y int) (interface{}, error) {
+		select {
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		default:
+			return x + y + int(time.Now().UnixNano()), nil
+		}
+	}
+	c, _ := New(fn, time.Millisecond*100, WithContextSupport())
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// different context instance
+	res, _ := c.Get(ctx, 1, 2)
+	res1, _ := c.Get(context.Background(), 1, 2)
+	if res != res1 {
+		t.Fatalf("expected %v, but got %v", res, res1)
+	}
+
+	// context canceled
+	cancel()
+	time.Sleep(time.Millisecond * 150)
+	c.Get(ctx, 1, 2)                  // trigger async refresh
+	time.Sleep(time.Millisecond * 50) // waiting async refresh
+	_, err := c.Get(ctx, 1, 2)
+	if err == context.Canceled {
+		t.Errorf("unexpected context canceled")
 	}
 }
 
