@@ -3,6 +3,7 @@ package lcache
 import (
 	"bytes"
 	"container/list"
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -30,25 +31,37 @@ type options struct {
 	cacheKeyGenerator CacheKeyGenerator
 	enableLRU         bool
 	capacity          int
+	contextSupport    bool
 }
 
+// Option configures how we set up the container
 type Option func(*options)
 
+// WithCacheKeyGenerator returns a Option which sets the cache key generator of container.
 func WithCacheKeyGenerator(g CacheKeyGenerator) Option {
 	return func(o *options) {
 		o.cacheKeyGenerator = g
 	}
 }
 
+// WithLRU returns a Option which enable lru evict algorithm in container.
 func WithLRU() Option {
 	return func(o *options) {
 		o.enableLRU = true
 	}
 }
 
+// WithCapacity returns a Option which set the capacity of container.
 func WithCapacity(capacity int) Option {
 	return func(o *options) {
 		o.capacity = capacity
+	}
+}
+
+// WithContextSupport returns a Option which enable context support for the given function.
+func WithContextSupport() Option {
+	return func(o *options) {
+		o.contextSupport = true
 	}
 }
 
@@ -85,12 +98,12 @@ func Must(c *Container, err error) *Container {
 }
 
 func newContainer(fn interface{}, ttl time.Duration, opt ...Option) (*Container, error) {
-	opts := &options{capacity: DefaultCapacity, cacheKeyGenerator: defaultCacheKeyGenerator}
+	opts := new(options)
 	for _, o := range opt {
 		o(opts)
 	}
 	if opts.capacity <= 0 {
-		return nil, errors.New("capacity must be positive")
+		opts.capacity = DefaultCapacity
 	}
 
 	t := reflect.TypeOf(fn)
@@ -106,6 +119,9 @@ func newContainer(fn interface{}, ttl time.Duration, opt ...Option) (*Container,
 		fnNumOut: t.NumOut(),
 		ttl:      ttl,
 	}
+	if c.opts.cacheKeyGenerator == nil {
+		c.opts.cacheKeyGenerator = c.generateCacheKey
+	}
 	if c.opts.enableLRU {
 		c.evictList = list.New()
 		c.elements = make(map[string]*list.Element)
@@ -115,18 +131,21 @@ func newContainer(fn interface{}, ttl time.Duration, opt ...Option) (*Container,
 	return c, nil
 }
 
-type CacheKeyGenerator func(params ...interface{}) string
-
-func defaultCacheKeyGenerator(params ...interface{}) string {
-	// generate unique key
+func (c *Container) generateCacheKey(params ...interface{}) string {
 	buf := bytes.NewBufferString("")
-	// FIXME: ["#" ""] and ["" "#"] will generate same key
+	if c.opts.contextSupport {
+		params = params[1:]
+	}
 	for _, param := range params {
+		// FIXME: ["#" ""] and ["" "#"] will generate same key
 		// convert pointer to reference value
 		buf.WriteString(fmt.Sprintf("#%v", reflect.Indirect(reflect.ValueOf(param))))
 	}
 	return buf.String()
 }
+
+// CacheKeyGenerator generates cache key for the given parameters.
+type CacheKeyGenerator func(params ...interface{}) string
 
 // Get is used to obtain the value with the given parameters. If the params string
 // has in the container, it will return immediately. Otherwise, it will load data
@@ -138,16 +157,13 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 	}
 
 	key := c.opts.cacheKeyGenerator(params...)
-
 	if !c.opts.enableLRU {
 		if itm, ok := c.items[key]; ok {
 			return itm.Value()
 		}
-
 		c.Lock()
 		itm := c.getLocked(params, key)
 		c.Unlock()
-
 		return itm.Value()
 	}
 
@@ -161,7 +177,6 @@ func (c *Container) Get(params ...interface{}) (interface{}, error) {
 	c.Lock()
 	ent := c.getLockedLRU(params, key)
 	c.Unlock()
-
 	return ent.Value.(*item).Value()
 
 }
@@ -171,7 +186,7 @@ func (c *Container) getLocked(params []interface{}, key string) *item {
 		return itm
 	}
 
-	itm := newItem(params, key, c.ttl, c.fn)
+	itm := newItem(c, key, params)
 	// copy on write
 	items := make(map[string]*item, len(c.items)+1)
 	for k, v := range c.items {
@@ -189,7 +204,7 @@ func (c *Container) getLockedLRU(params []interface{}, key string) *list.Element
 		return ent
 	}
 
-	itm := newItem(params, key, c.ttl, c.fn)
+	itm := newItem(c, key, params)
 	ent := c.evictList.PushFront(itm)
 
 	// copy on write
@@ -199,11 +214,9 @@ func (c *Container) getLockedLRU(params []interface{}, key string) *list.Element
 	}
 	elements[key] = ent
 	c.elements = elements
-
 	if c.evictList.Len() > c.opts.capacity {
 		c.removeOldestElement()
 	}
-
 	return ent
 }
 
@@ -270,26 +283,26 @@ func (c *Container) Len() int {
 
 // item is used to hold a value
 type item struct {
-	key        string
-	params     []interface{}
-	value      interface{}
-	err        error
-	ttl        time.Duration
-	expire     time.Time
-	fn         interface{}
+	sync.Mutex
+	c      *Container
+	key    string
+	params []interface{}
+
+	value    interface{}
+	err      error
+	expireAt time.Time
+
 	initialed  bool
 	initialCh  chan struct{}
 	refreshing bool
-	mu         sync.Mutex
 }
 
 // newItem constructs an item of the given parameters
-func newItem(params []interface{}, key string, ttl time.Duration, fn interface{}) *item {
+func newItem(c *Container, key string, params []interface{}) *item {
 	return &item{
+		c:         c,
 		key:       key,
 		params:    params,
-		ttl:       ttl,
-		fn:        fn,
 		initialCh: make(chan struct{}),
 	}
 }
@@ -298,7 +311,7 @@ func newItem(params []interface{}, key string, ttl time.Duration, fn interface{}
 // it will return immediately. Otherwise, it will return until the real value
 // is initialed.
 func (i *item) Value() (val interface{}, err error) {
-	if time.Now().Before(i.expire) {
+	if time.Now().Before(i.expireAt) {
 		return i.value, i.err
 	}
 	i.Refresh()
@@ -312,14 +325,14 @@ func (i *item) Value() (val interface{}, err error) {
 
 // Refresh is used to refresh real value with fn callback.
 func (i *item) Refresh() {
-	i.mu.Lock()
+	i.Lock()
 	if i.refreshing {
-		i.mu.Unlock()
+		i.Unlock()
 		return
 	}
 	i.refreshing = true
 	go i.refresh()
-	i.mu.Unlock()
+	i.Unlock()
 	return
 }
 
@@ -332,7 +345,7 @@ func (i *item) refresh() {
 		i.err = err
 	}
 
-	i.expire = time.Now().Add(i.ttl)
+	i.expireAt = time.Now().Add(i.c.ttl)
 	// reset refresh flag
 	i.refreshing = false
 	// set initialed flag
@@ -344,11 +357,16 @@ func (i *item) refresh() {
 
 // loadData is used to load data with fn and params
 func (i *item) loadData() (interface{}, error) {
-	f := reflect.ValueOf(i.fn)
+	f := reflect.ValueOf(i.c.fn)
+
 	in := make([]reflect.Value, f.Type().NumIn())
+	if i.c.opts.contextSupport {
+		i.params[0] = context.Background()
+	}
 	for k, param := range i.params {
 		in[k] = reflect.ValueOf(param)
 	}
+
 	res := f.Call(in)
 	if res[1].Interface() == nil {
 		return res[0].Interface(), nil
